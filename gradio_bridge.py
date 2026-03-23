@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from urllib import request as urlrequest
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Bridge helper for the local Phase 1 API.")
+    parser.add_argument("--base-url", required=True)
+
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("refresh")
+
+    select_parser = subparsers.add_parser("select-model")
+    select_parser.add_argument("--name", required=True)
+
+    single_parser = subparsers.add_parser("convert-single")
+    single_parser.add_argument("--request-json", required=True)
+
+    batch_parser = subparsers.add_parser("convert-batch")
+    batch_parser.add_argument("--request-json", required=True)
+
+    subparsers.add_parser("realtime-devices")
+    subparsers.add_parser("realtime-status")
+
+    realtime_config_parser = subparsers.add_parser("realtime-configure")
+    realtime_config_parser.add_argument("--request-json", required=True)
+
+    realtime_start_parser = subparsers.add_parser("realtime-start")
+    realtime_start_parser.add_argument("--request-json", required=True)
+
+    subparsers.add_parser("realtime-stop")
+    return parser.parse_args()
+
+
+def http_json(method: str, url: str, payload: dict | None = None) -> dict:
+    data = None
+    headers = {"Accept": "application/json"}
+    if payload is not None:
+        data = json.dumps(payload).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+
+    req = urlrequest.Request(url, data=data, headers=headers, method=method)
+    with urlrequest.urlopen(req, timeout=120) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def main() -> int:
+    args = parse_args()
+    base_url = args.base_url.rstrip("/")
+
+    try:
+        if args.command == "refresh":
+            payload = http_json("GET", f"{base_url}/phase1/catalog")
+        elif args.command == "select-model":
+            payload = http_json("POST", f"{base_url}/phase1/select-model", {"name": args.name})
+        elif args.command == "convert-single":
+            payload = http_json("POST", f"{base_url}/phase1/convert-single", json.loads(args.request_json))
+        elif args.command == "convert-batch":
+            payload = http_json("POST", f"{base_url}/phase1/convert-batch", json.loads(args.request_json))
+        elif args.command == "realtime-devices":
+            payload = http_json("GET", f"{base_url}/phase1/realtime/devices")
+        elif args.command == "realtime-status":
+            payload = http_json("GET", f"{base_url}/phase1/realtime/status")
+        elif args.command == "realtime-configure":
+            payload = http_json("POST", f"{base_url}/phase1/realtime/configure", json.loads(args.request_json))
+        elif args.command == "realtime-start":
+            payload = http_json("POST", f"{base_url}/phase1/realtime/start", json.loads(args.request_json))
+        elif args.command == "realtime-stop":
+            payload = http_json("POST", f"{base_url}/phase1/realtime/stop")
+        else:  # pragma: no cover
+            raise RuntimeError(f"Unsupported command: {args.command}")
+    except Exception as exc:
+        print(json.dumps({"error": str(exc)}), file=sys.stderr)
+        return 1
+
+    print(json.dumps(payload, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

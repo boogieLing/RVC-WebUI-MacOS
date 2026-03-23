@@ -24,6 +24,7 @@ from sklearn.cluster import MiniBatchKMeans
 import torch, platform
 import numpy as np
 import gradio as gr
+import gradio_client.utils as gradio_client_utils
 import faiss
 import pathlib
 import json
@@ -50,6 +51,20 @@ os.makedirs(os.path.join(now_dir, "assets", "weights"), exist_ok=True)
 os.environ["TEMP"] = tmp
 warnings.filterwarnings("ignore")
 torch.manual_seed(114514)
+
+
+_original_json_schema_to_python_type = gradio_client_utils._json_schema_to_python_type
+
+
+def _safe_json_schema_to_python_type(schema, defs):
+    # Gradio 4.x can emit boolean JSON schema fragments such as `additionalProperties: false`.
+    # Older client-side schema introspection assumes dictionaries only and crashes while serving `/config`.
+    if isinstance(schema, bool):
+        return "Any"
+    return _original_json_schema_to_python_type(schema, defs)
+
+
+gradio_client_utils._json_schema_to_python_type = _safe_json_schema_to_python_type
 
 
 config = Config()

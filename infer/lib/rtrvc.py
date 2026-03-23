@@ -1,6 +1,8 @@
+from __future__ import annotations
+
 from io import BytesIO
 import os
-from typing import Union, Literal, Optional
+from typing import Union, Literal, Optional, Any
 from pathlib import Path
 
 import fairseq
@@ -20,7 +22,7 @@ class RVC:
         self,
         key: Union[int, float],
         formant: Union[int, float],
-        pth_path: torch.serialization.FILE_LIKE,
+        pth_path: Any,
         index_path: str,
         index_rate: Union[int, float],
         n_cpu: int = os.cpu_count(),
