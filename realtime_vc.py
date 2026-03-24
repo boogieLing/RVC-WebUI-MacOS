@@ -305,10 +305,7 @@ class RealtimeVCController:
             if not Path(model_path).exists():
                 raise ValueError("Selected model file does not exist.")
 
-            if not self.gui_config.index_path:
-                raise ValueError("Index path is required.")
-
-            if not Path(self.gui_config.index_path).exists():
+            if self.gui_config.index_path and not Path(self.gui_config.index_path).exists():
                 raise ValueError("Selected index file does not exist.")
 
             self.set_devices(self.gui_config.sg_input_device, self.gui_config.sg_output_device)
