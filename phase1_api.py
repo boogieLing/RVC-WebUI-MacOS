@@ -64,6 +64,21 @@ outside_index_root = Path(os.getenv("outside_index_root", "assets/indices"))
 weight_uvr5_root = Path(os.getenv("weight_uvr5_root", "assets/uvr5_weights"))
 
 
+def _sanitize_model_info_summary(value: str | None) -> tuple[str, str | None]:
+    summary = (value or "").strip()
+    if not summary:
+        return "", None
+    if "Traceback (most recent call last):" in summary:
+        logger.warning("Suppressing traceback model summary from upstream info helper")
+        lines = [line.strip() for line in summary.splitlines() if line.strip()]
+        detail = next(
+            (line for line in reversed(lines) if not line.startswith("Traceback (most recent call last):")),
+            "Model metadata inspection failed.",
+        )
+        return "", detail
+    return summary, None
+
+
 class SelectModelRequest(BaseModel):
     name: str
 
@@ -414,9 +429,11 @@ def ensure_model_loaded(model_name: str) -> dict:
                 {"value": get_index_path_from_model(model_name), "__type__": "update"},
                 show_model_info(vc.cpt),
             )
+    model_info_summary, model_info_error = _sanitize_model_info_summary(model_state[5] if len(model_state) > 5 else "")
     return {
         "modelName": model_name,
-        "modelInfoSummary": model_state[5] if len(model_state) > 5 else "",
+        "modelInfoSummary": model_info_summary,
+        "modelInfoError": model_info_error,
         "indexPaths": [item for item in scan_indices() if item],
         "speakerCount": int(vc.n_spk or 0),
     }

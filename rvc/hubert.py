@@ -263,10 +263,20 @@ def apply_mask(self, x, padding_mask, target_list):
 
 
 def get_hubert(model_path="assets/hubert/hubert_base.pt", device=torch.device("cpu")):
-    models, _, _ = load_model_ensemble_and_task(
-        [model_path],
-        suffix="",
-    )
+    original_torch_load = torch.load
+
+    def compat_torch_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = compat_torch_load
+    try:
+        models, _, _ = load_model_ensemble_and_task(
+            [model_path],
+            suffix="",
+        )
+    finally:
+        torch.load = original_torch_load
     hubert_model = models[0]
     hubert_model = hubert_model.to(device)
 

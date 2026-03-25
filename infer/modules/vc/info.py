@@ -8,6 +8,28 @@ from .hash import model_hash_ckpt, hash_id, hash_similarity
 i18n = I18nAuto()
 
 
+def _render_model_info(cpt, short_id, long_id):
+    return f"""{i18n("Model name")}: %s
+{i18n("Sealing date")}: %s
+{i18n("Model Author")}: %s
+{i18n("Information")}: %s
+{i18n("Sampling rate")}: %s
+{i18n("Pitch guidance (f0)")}: %s
+{i18n("Version")}: %s
+{i18n("ID(short)")}: %s
+{i18n("ID(long)")}: %s""" % (
+        cpt.get("name", i18n("Unknown")),
+        datetime.fromtimestamp(float(cpt.get("timestamp", 0))),
+        cpt.get("author", i18n("Unknown")),
+        cpt.get("info", i18n("None")),
+        cpt.get("sr", i18n("Unknown")),
+        i18n("Exist") if cpt.get("f0", 0) == 1 else i18n("Not exist"),
+        cpt.get("version", i18n("None")),
+        short_id,
+        long_id,
+    )
+
+
 def show_model_info(cpt, show_long_id=False):
     try:
         h = model_hash_ckpt(cpt)
@@ -46,25 +68,15 @@ def show_model_info(cpt, show_long_id=False):
                 + i18n("Read from model")
                 + ")"
             )
-        txt = f"""{i18n("Model name")}: %s
-{i18n("Sealing date")}: %s
-{i18n("Model Author")}: %s
-{i18n("Information")}: %s
-{i18n("Sampling rate")}: %s
-{i18n("Pitch guidance (f0)")}: %s
-{i18n("Version")}: %s
-{i18n("ID(short)")}: %s
-{i18n("ID(long)")}: %s""" % (
-            cpt.get("name", i18n("Unknown")),
-            datetime.fromtimestamp(float(cpt.get("timestamp", 0))),
-            cpt.get("author", i18n("Unknown")),
-            cpt.get("info", i18n("None")),
-            cpt.get("sr", i18n("Unknown")),
-            i18n("Exist") if cpt.get("f0", 0) == 1 else i18n("Not exist"),
-            cpt.get("version", i18n("None")),
-            id,
-            h,
-        )
+        txt = _render_model_info(cpt, id, h)
+    except (FileNotFoundError, OSError):
+        idread = cpt.get("id", i18n("None"))
+        hread = cpt.get("hash", i18n("None"))
+        if not show_long_id and hread not in (None, "", i18n("None"), "None"):
+            long_id = i18n("Read from model")
+        else:
+            long_id = hread
+        txt = _render_model_info(cpt, idread, long_id)
     except:
         txt = traceback.format_exc()
 

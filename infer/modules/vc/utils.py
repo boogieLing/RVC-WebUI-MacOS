@@ -1,6 +1,8 @@
 import os, pathlib
+from contextlib import contextmanager
 
 from fairseq import checkpoint_utils
+import torch
 
 
 def get_index_path_from_model(sid):
@@ -20,11 +22,27 @@ def get_index_path_from_model(sid):
     )
 
 
+@contextmanager
+def torch_load_weights_compat():
+    original_torch_load = torch.load
+
+    def compat_torch_load(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original_torch_load(*args, **kwargs)
+
+    torch.load = compat_torch_load
+    try:
+        yield
+    finally:
+        torch.load = original_torch_load
+
+
 def load_hubert(device, is_half):
-    models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
-        ["assets/hubert/hubert_base.pt"],
-        suffix="",
-    )
+    with torch_load_weights_compat():
+        models, _, _ = checkpoint_utils.load_model_ensemble_and_task(
+            ["assets/hubert/hubert_base.pt"],
+            suffix="",
+        )
     hubert_model = models[0]
     hubert_model = hubert_model.to(device)
     if is_half:

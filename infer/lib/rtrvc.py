@@ -72,10 +72,20 @@ class RVC:
             Path(os.environ["rmvpe_root"]), is_half, 0, device, self.window, self.sr
         )
 
-        models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
-            ["assets/hubert/hubert_base.pt"],
-            suffix="",
-        )
+        original_torch_load = torch.load
+
+        def compat_torch_load(*args, **kwargs):
+            kwargs.setdefault("weights_only", False)
+            return original_torch_load(*args, **kwargs)
+
+        torch.load = compat_torch_load
+        try:
+            models, _, _ = fairseq.checkpoint_utils.load_model_ensemble_and_task(
+                ["assets/hubert/hubert_base.pt"],
+                suffix="",
+            )
+        finally:
+            torch.load = original_torch_load
         hubert_model = models[0]
         hubert_model = hubert_model.to(self.device)
         if self.is_half:
