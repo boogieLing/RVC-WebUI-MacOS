@@ -160,6 +160,8 @@ class VC:
             else:
                 file_index = ""  # 防止小白写错，自动帮他替换掉
 
+            # Keep the pipeline output as float waveform data. Quantizing here
+            # collapses most samples to -1/0/1 and destroys the rendered audio.
             audio_opt = self.pipeline.pipeline(
                 self.hubert_model,
                 self.net_g,
@@ -178,7 +180,7 @@ class VC:
                 self.version,
                 protect,
                 f0_file,
-            ).astype(np.int16)
+            )
             if self.tgt_sr != resample_sr >= 16000:
                 tgt_sr = resample_sr
             else:

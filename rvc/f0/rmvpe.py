@@ -1,17 +1,16 @@
 from io import BytesIO
 import os
-from typing import Any, Optional, Union
+from typing import Optional, Union
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 import onnxruntime as ort
+import torch
+import torch.nn.functional as F
 
-from rvc.jit import load_inputs, get_jit_model, export_jit_model, save_pickle
+from rvc.jit import export_jit_model, load_inputs, save_pickle
 
-from .mel import MelSpectrogram
 from .f0 import F0Predictor
+from .mel import MelSpectrogram
 from .models import get_rmvpe
 
 
@@ -39,87 +38,65 @@ def rmvpe_jit_export(
     return ckpt
 
 
-class RMVPE(nn.Module):
-    def __init__(self, model_path, device="cpu", is_half=True):
-        super().__init__()
-        self.device = device
-        self.is_half = is_half
-        
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"Model file not found: {model_path}")
-        
-        try:
-            # Load the model using torch.load instead of torch.jit.load
-            state_dict = torch.load(model_path, map_location=device, weights_only=False)
-            self.model = nn.Sequential(
-                nn.Conv2d(1, 32, kernel_size=3, padding=1),
-                nn.ReLU(),
-                nn.Conv2d(32, 32, kernel_size=3, padding=1),
-                nn.ReLU(),
-                nn.Conv2d(32, 1, kernel_size=3, padding=1)
-            )
-            self.model.load_state_dict(state_dict)
-            self.model.eval()
-            if is_half:
-                self.model = self.model.half()
-            self.model = self.model.to(device)
-        except Exception as e:
-            raise RuntimeError(f"Failed to load model: {str(e)}")
-    
-    def forward(self, x):
-        with torch.no_grad():
-            x = x.to(self.device)
-            if self.is_half:
-                x = x.half()
-            return self.model(x)
-            
-    def calculate(self, x):
-        return self.forward(x)
-
-    def compute_f0(
+class RMVPE(F0Predictor):
+    def __init__(
         self,
-        wav: np.ndarray,
-        p_len: Optional[int] = None,
-        filter_radius: Optional[Union[int, float]] = None,
+        model_path: str,
+        is_half: bool,
+        device=None,
+        use_jit: bool = False,
+        hop_length: int = 160,
+        f0_min: int = 50,
+        f0_max: int = 1100,
+        sampling_rate: int = 16000,
     ):
-        if p_len is None:
-            p_len = wav.shape[0] // self.hop_length
-        if not torch.is_tensor(wav):
-            wav = torch.from_numpy(wav)
-        mel = self.mel_extractor(wav.float().to(self.device).unsqueeze(0), center=True)
-        hidden = self._mel2hidden(mel)
-        if "privateuseone" not in str(self.device):
-            hidden = hidden.squeeze(0).cpu().numpy()
+        if device is None:
+            device = "cuda:0" if torch.cuda.is_available() else "cpu"
+        super().__init__(hop_length, f0_min, f0_max, sampling_rate, str(device))
+        self.is_half = is_half
+        self.device = device
+        self.mel_extractor = MelSpectrogram(
+            is_half,
+            128,
+            sampling_rate,
+            1024,
+            hop_length,
+            None,
+            30,
+            8000,
+        ).to(device)
+        if "privateuseone" in str(device):
+            ort_session = ort.InferenceSession(
+                "%s/rmvpe.onnx" % os.environ["rmvpe_root"],
+                providers=["DmlExecutionProvider"],
+            )
+            self.model = ort_session
         else:
-            hidden = hidden[0]
-        if self.is_half == True:
-            hidden = hidden.astype("float32")
+            if str(self.device) == "cuda":
+                self.device = torch.device("cuda:0")
+                self.device = str(self.device)
 
-        f0 = self._decode(hidden, thred=filter_radius)
+            def get_default_model():
+                model = get_rmvpe(model_path, self.device, is_half)
+                if is_half:
+                    model = model.half()
+                else:
+                    model = model.float()
+                return model
 
-        return self._interpolate_f0(self._resize_f0(f0, p_len))[0]
+            if use_jit:
+                if is_half and "cpu" in str(self.device):
+                    self.model = get_default_model()
+                else:
+                    self.model = get_default_model()
+            else:
+                self.model = get_default_model()
 
-    def _to_local_average_cents(self, salience, threshold=0.05):
-        center = np.argmax(salience, axis=1)  # 帧长#index
-        salience = np.pad(salience, ((0, 0), (4, 4)))  # 帧长,368
-        center += 4
-        todo_salience = []
-        todo_cents_mapping = []
-        starts = center - 4
-        ends = center + 5
-        for idx in range(salience.shape[0]):
-            todo_salience.append(salience[:, starts[idx] : ends[idx]][idx])
-            todo_cents_mapping.append(self.cents_mapping[starts[idx] : ends[idx]])
-        todo_salience = np.array(todo_salience)  # 帧长，9
-        todo_cents_mapping = np.array(todo_cents_mapping)  # 帧长，9
-        product_sum = np.sum(todo_salience * todo_cents_mapping, 1)
-        weight_sum = np.sum(todo_salience, 1)  # 帧长
-        devided = product_sum / weight_sum  # 帧长
-        maxx = np.max(salience, axis=1)  # 帧长
-        devided[maxx <= threshold] = 0
-        return devided
+            self.model = self.model.to(self.device)
+        cents_mapping = 20 * np.arange(360) + 1997.3794084376191
+        self.cents_mapping = np.pad(cents_mapping, (4, 4))
 
-    def _mel2hidden(self, mel):
+    def mel2hidden(self, mel):
         with torch.no_grad():
             n_frames = mel.shape[-1]
             n_pad = 32 * ((n_frames - 1) // 32 + 1) - n_frames
@@ -137,11 +114,54 @@ class RMVPE(nn.Module):
                 hidden = self.model(mel)
             return hidden[:, :n_frames]
 
-    def _decode(self, hidden, thred=0.03):
-        if thred is None:
-            thred = 0.03
-        cents_pred = self._to_local_average_cents(hidden, threshold=thred)
+    def decode(self, hidden, thred=0.03):
+        cents_pred = self.to_local_average_cents(hidden, thred=thred)
         f0 = 10 * (2 ** (cents_pred / 1200))
         f0[f0 == 10] = 0
-        # f0 = np.array([10 * (2 ** (cent_pred / 1200)) if cent_pred else 0 for cent_pred in cents_pred])
         return f0
+
+    def infer_from_audio(self, audio, thred=0.03):
+        if not torch.is_tensor(audio):
+            audio = torch.from_numpy(audio)
+        mel = self.mel_extractor(audio.float().to(self.device).unsqueeze(0), center=True)
+        hidden = self.mel2hidden(mel)
+        if "privateuseone" not in str(self.device):
+            hidden = hidden.squeeze(0).cpu().numpy()
+        else:
+            hidden = hidden[0]
+        if self.is_half:
+            hidden = hidden.astype("float32")
+
+        return self.decode(hidden, thred=thred)
+
+    def compute_f0(
+        self,
+        wav: np.ndarray,
+        p_len: Optional[int] = None,
+        filter_radius: Optional[Union[int, float]] = None,
+    ):
+        if p_len is None:
+            p_len = wav.shape[0] // self.hop_length
+        thred = 0.03 if filter_radius is None else filter_radius
+        f0 = self.infer_from_audio(wav, thred=thred)
+        return self._interpolate_f0(self._resize_f0(f0, p_len))[0]
+
+    def to_local_average_cents(self, salience, thred=0.05):
+        center = np.argmax(salience, axis=1)
+        salience = np.pad(salience, ((0, 0), (4, 4)))
+        center += 4
+        todo_salience = []
+        todo_cents_mapping = []
+        starts = center - 4
+        ends = center + 5
+        for idx in range(salience.shape[0]):
+            todo_salience.append(salience[:, starts[idx] : ends[idx]][idx])
+            todo_cents_mapping.append(self.cents_mapping[starts[idx] : ends[idx]])
+        todo_salience = np.array(todo_salience)
+        todo_cents_mapping = np.array(todo_cents_mapping)
+        product_sum = np.sum(todo_salience * todo_cents_mapping, 1)
+        weight_sum = np.sum(todo_salience, 1)
+        devided = product_sum / weight_sum
+        maxx = np.max(salience, axis=1)
+        devided[maxx <= thred] = 0
+        return devided

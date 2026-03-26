@@ -4,21 +4,28 @@ import torch.nn.functional as F
 import numpy as np
 import os
 
+from .e2e import E2E
+
+
+def load_rmvpe_state_dict(model_path, device):
+    state_dict = torch.load(model_path, map_location=device, weights_only=False)
+    if isinstance(state_dict, dict) and "model" in state_dict:
+        state_dict = state_dict["model"]
+    if not isinstance(state_dict, dict):
+        raise RuntimeError("RMVPE checkpoint did not contain a state_dict.")
+    return {
+        key.removeprefix("module."): value
+        for key, value in state_dict.items()
+    }
+
 
 def get_rmvpe(model_path, device, is_half=True):
     try:
-        # Load the model using torch.load instead of torch.jit.load
-        state_dict = torch.load(model_path, map_location=device, weights_only=False)
-        model = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(32, 1, kernel_size=3, padding=1)
-        )
+        state_dict = load_rmvpe_state_dict(model_path, device)
+        model = E2E(4, 1, (2, 2))
         model.load_state_dict(state_dict)
         model.eval()
-        if is_half:
+        if is_half and "cpu" not in str(device):
             model = model.half()
         model = model.to(device)
         return model

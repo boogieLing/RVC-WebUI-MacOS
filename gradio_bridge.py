@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from urllib import error as urlerror
 from urllib import request as urlrequest
 
 
@@ -124,6 +125,18 @@ def main() -> int:
             payload = http_json("POST", f"{base_url}/phase1/realtime/stop")
         else:  # pragma: no cover
             raise RuntimeError(f"Unsupported command: {args.command}")
+    except urlerror.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore").strip()
+        if detail:
+            try:
+                payload = json.loads(detail)
+                if isinstance(payload, dict) and payload.get("detail"):
+                    print(json.dumps({"error": payload["detail"]}, ensure_ascii=False), file=sys.stderr)
+                    return 1
+            except json.JSONDecodeError:
+                pass
+        print(json.dumps({"error": str(exc)}, ensure_ascii=False), file=sys.stderr)
+        return 1
     except Exception as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 1

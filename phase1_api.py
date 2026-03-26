@@ -779,7 +779,7 @@ def run_single(payload: SingleInferencePayload) -> dict:
 
     target_sr, audio_opt = output
     output_path = single_output_path(input_path)
-    save_audio(str(output_path), audio_opt, target_sr, f32=True, format="wav")
+    save_audio(str(output_path), audio_opt, target_sr, f32=False, format="wav")
     return {
         "message": message,
         "outputAudioURL": output_path.as_uri(),
@@ -833,7 +833,7 @@ def run_batch(payload: BatchInferencePayload) -> dict:
                 str(output_root / output_name),
                 audio_opt,
                 target_sr,
-                f32=True,
+                f32=False,
                 format=payload.format,
             )
         messages.append(f"{Path(path).name} -> {message}")
