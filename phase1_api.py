@@ -64,7 +64,34 @@ outside_index_root = Path(os.getenv("outside_index_root", "assets/indices"))
 weight_uvr5_root = Path(os.getenv("weight_uvr5_root", "assets/uvr5_weights"))
 
 
-def _sanitize_model_info_summary(value: str | None) -> tuple[str, str | None]:
+def _normalize_model_display_name(model_name: str | None) -> str:
+    if not model_name:
+        return ""
+    return Path(model_name).stem or model_name
+
+
+def _inject_fallback_model_name(summary: str, fallback_model_name: str | None) -> str:
+    normalized_name = _normalize_model_display_name(fallback_model_name)
+    if not normalized_name:
+        return summary
+
+    lines: list[str] = []
+    for line in summary.splitlines():
+        stripped = line.strip()
+        if ":" not in stripped:
+            lines.append(line)
+            continue
+
+        label, value = stripped.split(":", 1)
+        if label.strip() in {"Model name", "模型名"} and value.strip() in {"Unknown", "未知"}:
+            indent = line[: len(line) - len(line.lstrip())]
+            lines.append(f"{indent}{label}: {normalized_name}")
+            continue
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _sanitize_model_info_summary(value: str | None, fallback_model_name: str | None = None) -> tuple[str, str | None]:
     summary = (value or "").strip()
     if not summary:
         return "", None
@@ -76,6 +103,7 @@ def _sanitize_model_info_summary(value: str | None) -> tuple[str, str | None]:
             "Model metadata inspection failed.",
         )
         return "", detail
+    summary = _inject_fallback_model_name(summary, fallback_model_name)
     return summary, None
 
 
@@ -429,7 +457,10 @@ def ensure_model_loaded(model_name: str) -> dict:
                 {"value": get_index_path_from_model(model_name), "__type__": "update"},
                 show_model_info(vc.cpt),
             )
-    model_info_summary, model_info_error = _sanitize_model_info_summary(model_state[5] if len(model_state) > 5 else "")
+    model_info_summary, model_info_error = _sanitize_model_info_summary(
+        model_state[5] if len(model_state) > 5 else "",
+        fallback_model_name=model_name,
+    )
     return {
         "modelName": model_name,
         "modelInfoSummary": model_info_summary,
