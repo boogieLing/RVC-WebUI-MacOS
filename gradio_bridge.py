@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     subparsers.add_parser("unload-model")
 
     subparsers.add_parser("uvr-models")
+    subparsers.add_parser("uvr-release")
 
     uvr_convert_parser = subparsers.add_parser("uvr-convert")
     uvr_convert_parser.add_argument("--request-json", required=True)
@@ -91,6 +92,8 @@ def main() -> int:
             payload = http_json("POST", f"{base_url}/phase1/unload-model")
         elif args.command == "uvr-models":
             payload = http_json("GET", f"{base_url}/phase1/uvr-models")
+        elif args.command == "uvr-release":
+            payload = http_json("POST", f"{base_url}/phase1/uvr-release")
         elif args.command == "uvr-convert":
             payload = http_json("POST", f"{base_url}/phase1/uvr-convert", json.loads(args.request_json))
         elif args.command == "asset-check":

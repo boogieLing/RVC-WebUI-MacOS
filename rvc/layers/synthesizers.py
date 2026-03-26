@@ -37,6 +37,8 @@ class SynthesizerTrnMsNSFsid(nn.Module):
         sr: Optional[Union[str, int]],
         encoder_dim: int,
         use_f0: bool,
+        harmonic_num: int = 0,
+        flow_n_layers: int = 3,
     ):
         super().__init__()
         if isinstance(sr, str):
@@ -85,6 +87,7 @@ class SynthesizerTrnMsNSFsid(nn.Module):
                 upsample_kernel_sizes,
                 gin_channels=gin_channels,
                 sr=sr,
+                harmonic_num=harmonic_num,
             )
         else:
             self.dec = Generator(
@@ -107,7 +110,12 @@ class SynthesizerTrnMsNSFsid(nn.Module):
             gin_channels=gin_channels,
         )
         self.flow = ResidualCouplingBlock(
-            inter_channels, hidden_channels, 5, 1, 3, gin_channels=gin_channels
+            inter_channels,
+            hidden_channels,
+            5,
+            1,
+            flow_n_layers,
+            gin_channels=gin_channels,
         )
         self.emb_g = nn.Embedding(self.spk_embed_dim, gin_channels)
 

@@ -1,5 +1,6 @@
 import os
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +52,7 @@ class AudioPre:
     def _path_audio_(self, music_file, ins_root=None, vocal_root=None, format="flac"):
         if ins_root is None and vocal_root is None:
             return "No save root."
-        name = os.path.basename(music_file)
+        name = self._normalized_output_stem(music_file)
         if ins_root is not None:
             os.makedirs(ins_root, exist_ok=True)
         if vocal_root is not None:
@@ -172,3 +173,10 @@ class AudioPre:
                 f32=True,
                 format=format,
             )
+
+    @staticmethod
+    def _normalized_output_stem(path: str) -> str:
+        name = Path(path).name
+        if name.endswith(".reformatted.wav"):
+            name = name[: -len(".reformatted.wav")]
+        return Path(name).stem or name

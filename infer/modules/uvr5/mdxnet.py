@@ -1,5 +1,6 @@
 import os
 import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -199,7 +200,7 @@ class Predictor:
     def prediction(self, m, vocal_root, others_root, format):
         os.makedirs(vocal_root, exist_ok=True)
         os.makedirs(others_root, exist_ok=True)
-        basename = os.path.basename(m)
+        basename = self._normalized_output_stem(m)
         mix, rate = load_audio(m, mono=False, sr=44100)
         if mix.ndim == 1:
             mix = np.asfortranarray([mix, mix])
@@ -220,6 +221,13 @@ class Predictor:
             True,
             format=format,
         )
+
+    @staticmethod
+    def _normalized_output_stem(path: str) -> str:
+        name = Path(path).name
+        if name.endswith(".reformatted.wav"):
+            name = name[: -len(".reformatted.wav")]
+        return Path(name).stem or name
 
 
 class MDXNetDereverb:

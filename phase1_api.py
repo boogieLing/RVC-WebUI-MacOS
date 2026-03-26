@@ -23,6 +23,12 @@ sys.path.append(now_dir)
 load_dotenv()
 load_dotenv("sha256.env")
 
+default_temp_root = Path(now_dir) / "TEMP"
+default_temp_root.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("TEMP", str(default_temp_root))
+os.environ.setdefault("TMP", str(default_temp_root))
+os.environ.setdefault("TMPDIR", str(default_temp_root))
+
 if sys.platform == "darwin":
     os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
@@ -34,7 +40,7 @@ from infer.lib.train.process_ckpt import change_info, extract_small_model, merge
 from infer.modules.vc import VC, hash_similarity
 from infer.modules.vc.info import show_info, show_model_info
 from infer.modules.vc.utils import get_index_path_from_model
-from infer.modules.uvr5.modules import uvr
+from infer.modules.uvr5.modules import uvr, release_uvr_memory
 from rvc.onnx import export_onnx as export_rvc_onnx
 from realtime_vc import RealtimeVCController
 
@@ -444,19 +450,26 @@ def ensure_model_loaded(model_name: str) -> dict:
     global selected_model_name
     if not model_name:
         raise HTTPException(status_code=400, detail="Model name is required.")
-    with engine_lock:
-        if selected_model_name != model_name or vc.net_g is None:
-            model_state = vc.get_vc(model_name, 0.33, 0.33, "", "")
-            selected_model_name = model_name
-        else:
-            model_state = (
-                {"visible": True, "maximum": vc.n_spk or 0, "__type__": "update"},
-                {"visible": vc.if_f0 != 0, "value": 0.33, "__type__": "update"},
-                {"visible": vc.if_f0 != 0, "value": 0.33, "__type__": "update"},
-                {"value": get_index_path_from_model(model_name), "__type__": "update"},
-                {"value": get_index_path_from_model(model_name), "__type__": "update"},
-                show_model_info(vc.cpt),
-            )
+    try:
+        with engine_lock:
+            if selected_model_name != model_name or vc.net_g is None:
+                model_state = vc.get_vc(model_name, 0.33, 0.33, "", "")
+                selected_model_name = model_name
+            else:
+                model_state = (
+                    {"visible": True, "maximum": vc.n_spk or 0, "__type__": "update"},
+                    {"visible": vc.if_f0 != 0, "value": 0.33, "__type__": "update"},
+                    {"visible": vc.if_f0 != 0, "value": 0.33, "__type__": "update"},
+                    {"value": get_index_path_from_model(model_name), "__type__": "update"},
+                    {"value": get_index_path_from_model(model_name), "__type__": "update"},
+                    show_model_info(vc.cpt),
+                )
+    except ValueError as exc:
+        logger.warning("Model load rejected for %s: %s", model_name, exc)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Model load failed for %s", model_name)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
     model_info_summary, model_info_error = _sanitize_model_info_summary(
         model_state[5] if len(model_state) > 5 else "",
         fallback_model_name=model_name,
@@ -590,6 +603,16 @@ def run_uvr(payload: UVRConvertPayload) -> dict:
         "modelName": payload.modelName,
         "stagedInputCount": len(staged_paths),
     }
+
+
+def release_uvr_runtime() -> dict:
+    try:
+        with engine_lock:
+            release_uvr_memory()
+    except Exception as exc:
+        logger.exception("UVR memory release failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return {"released": True, "message": "UVR memory released."}
 
 
 def run_export_onnx(payload: ExportOnnxPayload) -> dict:
@@ -999,6 +1022,11 @@ def uvr_models() -> dict:
 @app.post("/phase1/uvr-convert")
 def uvr_convert(payload: UVRConvertPayload) -> dict:
     return run_uvr(payload)
+
+
+@app.post("/phase1/uvr-release")
+def uvr_release() -> dict:
+    return release_uvr_runtime()
 
 
 @app.get("/phase1/assets-integrity")

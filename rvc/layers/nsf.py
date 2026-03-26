@@ -72,13 +72,14 @@ class NSFGenerator(torch.nn.Module):
         upsample_kernel_sizes: List[int],
         gin_channels: int,
         sr: int,
+        harmonic_num: int = 0,
     ):
         super(NSFGenerator, self).__init__()
         self.num_kernels = len(resblock_kernel_sizes)
         self.num_upsamples = len(upsample_rates)
 
         self.f0_upsamp = torch.nn.Upsample(scale_factor=math.prod(upsample_rates))
-        self.m_source = SourceModuleHnNSF(sampling_rate=sr, harmonic_num=0)
+        self.m_source = SourceModuleHnNSF(sampling_rate=sr, harmonic_num=harmonic_num)
         self.noise_convs = nn.ModuleList()
         self.conv_pre = Conv1d(
             initial_channel, upsample_initial_channel, 7, 1, padding=3

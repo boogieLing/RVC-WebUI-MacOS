@@ -32,6 +32,12 @@ def _render_model_info(cpt, short_id, long_id):
 
 def show_model_info(cpt, show_long_id=False):
     try:
+        if cpt.get("_auto_converted_training_checkpoint"):
+            return _render_model_info(
+                cpt,
+                cpt.get("id", i18n("None")),
+                i18n("Hidden") if not show_long_id else cpt.get("hash", i18n("None")),
+            )
         h = model_hash_ckpt(cpt)
         id = hash_id(h)
         idread = cpt.get("id", "None")

@@ -1,6 +1,8 @@
 import os
 import traceback
 import logging
+import tempfile
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -14,8 +16,19 @@ from infer.modules.uvr5.vr import AudioPre
 config = Config()
 
 
+def release_uvr_memory():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        logger.info("Executed torch.cuda.empty_cache()")
+    elif torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+        logger.info("Executed torch.mps.empty_cache()")
+    return {"released": True}
+
+
 def uvr(model_name, inp_root, save_root_vocal, paths, save_root_ins, agg, format0):
     infos = []
+    temp_root = os.getenv("TEMP") or os.getenv("TMP") or os.getenv("TMPDIR") or tempfile.gettempdir()
     try:
         inp_root = inp_root.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
         save_root_vocal = (
@@ -57,9 +70,10 @@ def uvr(model_name, inp_root, save_root_vocal, paths, save_root_ins, agg, format
                 need_reformat = 1
                 logger.warning(f"Exception {e} occured. Will reformat")
             if need_reformat == 1:
-                tmp_path = "%s/%s.reformatted.wav" % (
-                    os.path.join(os.environ["TEMP"]),
-                    os.path.basename(inp_path),
+                original_name = Path(inp_path).stem or Path(inp_path).name
+                tmp_path = os.path.join(
+                    temp_root,
+                    f"{original_name}.reformatted.wav",
                 )
                 resample_audio(inp_path, tmp_path, "pcm_s16le", "s16", 44100, "stereo")
                 try:  # Remove the original file
@@ -92,10 +106,5 @@ def uvr(model_name, inp_root, save_root_vocal, paths, save_root_ins, agg, format
                 del pre_fun
         except:
             traceback.print_exc()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-            logger.info("Executed torch.cuda.empty_cache()")
-        elif torch.backends.mps.is_available():
-            torch.mps.empty_cache()
-            logger.info("Executed torch.mps.empty_cache()")
+        release_uvr_memory()
     yield "\n".join(infos)

@@ -171,7 +171,7 @@ class SineGenerator(torch.nn.Module):
         b = torch.arange(1, self.dim + 1, dtype=f0.dtype, device=f0.device).reshape(
             1, 1, -1
         )
-        rad *= b
+        rad = rad * b
         rand_ini = torch.rand(1, 1, self.dim, device=f0.device)
         rand_ini[..., 0] = 0
         rad += rand_ini
