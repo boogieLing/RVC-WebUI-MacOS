@@ -319,6 +319,33 @@ class RealtimeVCController:
             self.last_error = None
             return self.status_snapshot()
 
+    def release_runtime(self) -> dict:
+        with self.lock:
+            self.stop_stream()
+            self.rvc = None
+            self.resampler = None
+            self.resampler2 = None
+            self.tg = None
+            self.input_wav = None
+            self.input_wav_denoise = None
+            self.input_wav_res = None
+            self.rms_buffer = None
+            self.sola_buffer = None
+            self.nr_buffer = None
+            self.output_buffer = None
+            self.fade_in_window = None
+            self.fade_out_window = None
+            self.delay_time_ms = 0
+            self.infer_time_ms = 0
+            self.last_error = None
+            self.gui_config.model_name = ""
+            self.gui_config.index_path = ""
+            if hasattr(torch, "cuda") and hasattr(torch.cuda, "empty_cache"):
+                torch.cuda.empty_cache()
+            if hasattr(torch, "mps") and hasattr(torch.mps, "empty_cache"):
+                torch.mps.empty_cache()
+            return self.status_snapshot()
+
     def _start_realtime_locked(self, model_path: Optional[str] = None) -> None:
         torch.cuda.empty_cache()
         pth_path = model_path or self.gui_config.model_name

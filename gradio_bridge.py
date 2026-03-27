@@ -19,6 +19,7 @@ def parse_args() -> argparse.Namespace:
     select_parser.add_argument("--name", required=True)
 
     subparsers.add_parser("unload-model")
+    subparsers.add_parser("release-runtime-memory")
 
     subparsers.add_parser("uvr-models")
     subparsers.add_parser("uvr-release")
@@ -90,6 +91,8 @@ def main() -> int:
             payload = http_json("POST", f"{base_url}/phase1/select-model", {"name": args.name})
         elif args.command == "unload-model":
             payload = http_json("POST", f"{base_url}/phase1/unload-model")
+        elif args.command == "release-runtime-memory":
+            payload = http_json("POST", f"{base_url}/phase1/release-runtime-memory")
         elif args.command == "uvr-models":
             payload = http_json("GET", f"{base_url}/phase1/uvr-models")
         elif args.command == "uvr-release":

@@ -120,6 +120,7 @@ class SelectModelRequest(BaseModel):
 class SingleInferencePayload(BaseModel):
     modelName: str
     inputFileURL: str
+    outputDirectoryURL: str
     speakerId: int = 0
     transpose: float
     f0Method: str
@@ -600,6 +601,16 @@ def run_uvr(payload: UVRConvertPayload) -> dict:
         "message": message,
         "vocalOutputDirectoryURL": vocal_output_root.as_uri(),
         "instrumentalOutputDirectoryURL": instrumental_output_root.as_uri(),
+        "vocalOutputFileURLs": [
+            path.as_uri()
+            for path in sorted(vocal_output_root.iterdir())
+            if path.is_file()
+        ],
+        "instrumentalOutputFileURLs": [
+            path.as_uri()
+            for path in sorted(instrumental_output_root.iterdir())
+            if path.is_file()
+        ],
         "modelName": payload.modelName,
         "stagedInputCount": len(staged_paths),
     }
@@ -613,6 +624,47 @@ def release_uvr_runtime() -> dict:
         logger.exception("UVR memory release failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     return {"released": True, "message": "UVR memory released."}
+
+
+def release_runtime_memory() -> dict:
+    global selected_model_name, realtime_controller
+    try:
+        with engine_lock:
+            realtime_released = False
+            if realtime_controller is not None:
+                realtime_controller.release_runtime()
+                realtime_released = True
+
+            model_result = unload_model()
+            release_uvr_memory()
+
+            if hasattr(config, "device") and str(config.device) == "mps" and hasattr(sys.modules.get("torch"), "mps"):
+                try:
+                    import torch
+                    if hasattr(torch.mps, "empty_cache"):
+                        torch.mps.empty_cache()
+                except Exception:
+                    pass
+            else:
+                try:
+                    import torch
+                    if hasattr(torch.cuda, "empty_cache"):
+                        torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+            selected_model_name = ""
+
+        return {
+            "released": True,
+            "message": "Runtime memory released.",
+            "modelUnloaded": model_result.get("unloaded", False),
+            "realtimeReleased": realtime_released,
+            "uvrReleased": True,
+        }
+    except Exception as exc:
+        logger.exception("Runtime memory release failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def run_export_onnx(payload: ExportOnnxPayload) -> dict:
@@ -772,11 +824,19 @@ def single_output_path(input_path: str) -> Path:
     return OUTPUT_DIR / f"{stem}-{stamp}.wav"
 
 
+def single_output_path_in_directory(input_path: str, output_root: Path) -> Path:
+    stem = Path(input_path).stem or "converted"
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return output_root / f"{stem}-{stamp}.wav"
+
+
 def run_single(payload: SingleInferencePayload) -> dict:
     ensure_model_loaded(payload.modelName)
     input_path = local_path(payload.inputFileURL)
     if not input_path or not os.path.exists(input_path):
         raise HTTPException(status_code=400, detail="Input audio file does not exist.")
+    output_root = Path(local_path(payload.outputDirectoryURL) or payload.outputDirectoryURL)
+    output_root.mkdir(parents=True, exist_ok=True)
 
     index_path = payload.indexPath or get_index_path_from_model(payload.modelName)
     f0_file = local_path(payload.f0FileURL)
@@ -801,11 +861,12 @@ def run_single(payload: SingleInferencePayload) -> dict:
         raise HTTPException(status_code=400, detail=message)
 
     target_sr, audio_opt = output
-    output_path = single_output_path(input_path)
+    output_path = single_output_path_in_directory(input_path, output_root)
     save_audio(str(output_path), audio_opt, target_sr, f32=False, format="wav")
     return {
         "message": message,
         "outputAudioURL": output_path.as_uri(),
+        "outputDirectoryURL": output_root.as_uri(),
     }
 
 
@@ -832,6 +893,7 @@ def run_batch(payload: BatchInferencePayload) -> dict:
 
     index_path = payload.indexPath or get_index_path_from_model(payload.modelName)
     messages: list[str] = []
+    output_file_urls: list[str] = []
 
     for path in input_paths:
         with engine_lock:
@@ -852,18 +914,21 @@ def run_batch(payload: BatchInferencePayload) -> dict:
         if output is not None:
             target_sr, audio_opt = output
             output_name = f"{Path(path).name}.{payload.format}"
+            output_path = output_root / output_name
             save_audio(
-                str(output_root / output_name),
+                str(output_path),
                 audio_opt,
                 target_sr,
                 f32=False,
                 format=payload.format,
             )
+            output_file_urls.append(output_path.as_uri())
         messages.append(f"{Path(path).name} -> {message}")
 
     return {
         "message": "\n".join(messages),
         "outputDirectoryURL": output_root.as_uri(),
+        "outputFileURLs": output_file_urls,
     }
 
 
@@ -1027,6 +1092,11 @@ def uvr_convert(payload: UVRConvertPayload) -> dict:
 @app.post("/phase1/uvr-release")
 def uvr_release() -> dict:
     return release_uvr_runtime()
+
+
+@app.post("/phase1/release-runtime-memory")
+def release_runtime_memory_route() -> dict:
+    return release_runtime_memory()
 
 
 @app.get("/phase1/assets-integrity")
