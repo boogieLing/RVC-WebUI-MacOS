@@ -11,3 +11,5 @@ sounddevice
 torch
 torchaudio
 torchvision
+ChatTTS
+transformers==4.53.2

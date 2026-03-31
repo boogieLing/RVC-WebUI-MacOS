@@ -51,6 +51,10 @@ def parse_args() -> argparse.Namespace:
     single_parser = subparsers.add_parser("convert-single")
     single_parser.add_argument("--request-json", required=True)
 
+    text_parser = subparsers.add_parser("convert-text")
+    text_parser.add_argument("--request-json", required=True)
+    subparsers.add_parser("text-status")
+
     batch_parser = subparsers.add_parser("convert-batch")
     batch_parser.add_argument("--request-json", required=True)
 
@@ -67,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def http_json(method: str, url: str, payload: dict | None = None) -> dict:
+def http_json(method: str, url: str, payload: dict | None = None, timeout: int = 120) -> dict:
     data = None
     headers = {"Accept": "application/json"}
     if payload is not None:
@@ -75,7 +79,7 @@ def http_json(method: str, url: str, payload: dict | None = None) -> dict:
         headers["Content-Type"] = "application/json"
 
     req = urlrequest.Request(url, data=data, headers=headers, method=method)
-    with urlrequest.urlopen(req, timeout=120) as response:
+    with urlrequest.urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -117,6 +121,10 @@ def main() -> int:
             payload = http_json("POST", f"{base_url}/phase1/ckpt-extract", json.loads(args.request_json))
         elif args.command == "convert-single":
             payload = http_json("POST", f"{base_url}/phase1/convert-single", request_payload)
+        elif args.command == "convert-text":
+            payload = http_json("POST", f"{base_url}/phase1/convert-text", request_payload, timeout=600)
+        elif args.command == "text-status":
+            payload = http_json("GET", f"{base_url}/phase1/text-status")
         elif args.command == "convert-batch":
             payload = http_json("POST", f"{base_url}/phase1/convert-batch", request_payload)
         elif args.command == "realtime-devices":
