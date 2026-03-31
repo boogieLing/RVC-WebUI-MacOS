@@ -1,5 +1,0 @@
-file,total_lines,branch_signals,est_complexity,max_nesting
-gradio_bridge.py,132,7,8,1
-text_voice_presets.py,285,29,30,2
-phase1_api.py,1466,161,162,2
-infer/modules/vc/modules.py,252,23,24,1
