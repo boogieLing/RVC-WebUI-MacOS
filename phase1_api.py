@@ -46,6 +46,7 @@ from infer.modules.vc import VC, hash_similarity
 from infer.modules.vc.info import show_info, show_model_info
 from infer.modules.vc.utils import get_index_path_from_model
 from infer.modules.uvr5.modules import uvr, release_uvr_memory
+from operation_state import ForegroundOperationRegistry, OperationConflictError
 from rvc.onnx import export_onnx as export_rvc_onnx
 from realtime_vc import RealtimeVCController
 from text_voice_presets import resolve_text_voice_profile
@@ -57,8 +58,8 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-BACKEND_API_VERSION = "phase1-api-2026-03-29"
-BACKEND_BUILD_VERSION = "2026.03.31.2"
+BACKEND_API_VERSION = "phase1-api-2026-04-02-150837"
+BACKEND_BUILD_VERSION = "2026.04.02.150837"
 BACKEND_SESSION_STARTED_AT = datetime.utcnow().isoformat(timespec="seconds") + "Z"
 BACKEND_SESSION_ID = hashlib.sha1(
     f"{BACKEND_BUILD_VERSION}|{BACKEND_SESSION_STARTED_AT}|{os.getpid()}".encode("utf-8")
@@ -77,6 +78,7 @@ engine_lock = threading.RLock()
 text_progress_lock = threading.RLock()
 selected_model_name: str = ""
 realtime_controller: RealtimeVCController | None = None
+foreground_operation = ForegroundOperationRegistry()
 chattts_runtime = None
 chattts_default_speaker = None
 chattts_asset_root = ROOT / "asset"
@@ -147,6 +149,45 @@ def _sanitize_model_info_summary(value: str | None, fallback_model_name: str | N
         return "", detail
     summary = _inject_fallback_model_name(summary, fallback_model_name)
     return summary, None
+
+
+def current_operation_snapshot() -> dict:
+    realtime_last_error = realtime_controller.last_error if realtime_controller is not None else None
+    return foreground_operation.snapshot(realtime_last_error=realtime_last_error)
+
+
+def ensure_operation_available(requester_label: str) -> None:
+    try:
+        foreground_operation.ensure_available(requester_label)
+    except OperationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def set_operation_state(mode: str, phase: str, message: str, blocking: bool = True) -> dict:
+    return foreground_operation.begin(mode, phase, message, blocking=blocking)
+
+
+def fail_operation_state(mode: str, message: str, last_failure: str) -> dict:
+    return foreground_operation.fail(mode, message, last_failure)
+
+
+def clear_operation_state() -> dict:
+    return foreground_operation.clear()
+
+
+def cleanup_temporary_runtime_dirs() -> None:
+    """清理 TEMP 下的阶段性工作目录，避免崩溃退出后残留脏数据。"""
+
+    prefixes = ("text-audio-", "uvr-")
+    if not TMP_DIR.exists():
+        return
+
+    for entry in TMP_DIR.iterdir():
+        if not entry.is_dir():
+            continue
+        if not entry.name.startswith(prefixes):
+            continue
+        shutil.rmtree(entry, ignore_errors=True)
 
 
 class SelectModelRequest(BaseModel):
@@ -1309,7 +1350,11 @@ def text_source_path_in_directory(text: str, output_root: Path) -> Path:
 
 def run_single(payload: SingleInferencePayload) -> dict:
     output: tuple[int, np.ndarray] | None = None
+    operation_acquired = False
     try:
+        ensure_operation_available("single convert")
+        set_operation_state("single", "running", "Single convert running.")
+        operation_acquired = True
         ensure_model_loaded(payload.modelName)
         input_path = local_path(payload.inputFileURL)
         if not input_path or not os.path.exists(input_path):
@@ -1347,15 +1392,26 @@ def run_single(payload: SingleInferencePayload) -> dict:
             "outputAudioURL": output_path.as_uri(),
             "outputDirectoryURL": output_root.as_uri(),
         }
+    except HTTPException as exc:
+        if operation_acquired:
+            fail_operation_state("single", "Single convert failed.", str(exc.detail))
+        raise
+    except Exception as exc:
+        if operation_acquired:
+            fail_operation_state("single", "Single convert failed.", str(exc))
+        raise
     finally:
         output = None
         reset_task_runtime("single conversion")
+        if operation_acquired and current_operation_snapshot()["mode"] == "single":
+            clear_operation_state()
 
 
 def run_text(payload: TextAudioPayload) -> dict:
     source_path: Path | None = None
     preserved_source_path: Path | None = None
     output: tuple[int, np.ndarray] | None = None
+    operation_acquired = False
     set_text_audio_progress(
         stage="preparing",
         title="Prepare task",
@@ -1377,6 +1433,9 @@ def run_text(payload: TextAudioPayload) -> dict:
     index_path = payload.indexPath or get_index_path_from_model(payload.modelName)
 
     try:
+        ensure_operation_available("text audio generation")
+        set_operation_state("text", "running", "Text audio generation is running.")
+        operation_acquired = True
         source_path = synthesize_text_to_temp_wav(trimmed_text, payload)
         preserved_source_path = text_source_path_in_directory(trimmed_text, output_root)
         shutil.copy2(source_path, preserved_source_path)
@@ -1437,16 +1496,30 @@ def run_text(payload: TextAudioPayload) -> dict:
             "outputAudioURL": output_path.as_uri(),
             "outputDirectoryURL": output_root.as_uri(),
         }
+    except HTTPException as exc:
+        if operation_acquired:
+            fail_operation_state("text", "Text audio generation failed.", str(exc.detail))
+        raise
+    except Exception as exc:
+        if operation_acquired:
+            fail_operation_state("text", "Text audio generation failed.", str(exc))
+        raise
     finally:
         if source_path is not None:
             shutil.rmtree(source_path.parent, ignore_errors=True)
         output = None
         reset_task_runtime("text generation", release_chattts=True)
+        if operation_acquired and current_operation_snapshot()["mode"] == "text":
+            clear_operation_state()
 
 
 def run_batch(payload: BatchInferencePayload) -> dict:
     output: tuple[int, np.ndarray] | None = None
+    operation_acquired = False
     try:
+        ensure_operation_available("batch convert")
+        set_operation_state("batch", "running", "Batch convert running.")
+        operation_acquired = True
         ensure_model_loaded(payload.modelName)
         output_root = Path(local_path(payload.outputDirectoryURL) or payload.outputDirectoryURL)
         output_root.mkdir(parents=True, exist_ok=True)
@@ -1507,9 +1580,19 @@ def run_batch(payload: BatchInferencePayload) -> dict:
             "outputDirectoryURL": output_root.as_uri(),
             "outputFileURLs": output_file_urls,
         }
+    except HTTPException as exc:
+        if operation_acquired:
+            fail_operation_state("batch", "Batch convert failed.", str(exc.detail))
+        raise
+    except Exception as exc:
+        if operation_acquired:
+            fail_operation_state("batch", "Batch convert failed.", str(exc))
+        raise
     finally:
         output = None
         reset_task_runtime("batch conversion")
+        if operation_acquired and current_operation_snapshot()["mode"] == "batch":
+            clear_operation_state()
 
 
 def model_file_path(model_name: str) -> Path:
@@ -1535,15 +1618,18 @@ def realtime_status_payload() -> dict:
     return {
         "devices": controller.devices_snapshot(),
         "status": controller.status_snapshot(),
+        "operation": current_operation_snapshot(),
     }
 
 
 def configure_realtime(payload: RealtimeConfigurePayload, allow_restart: bool = False) -> dict:
     try:
-        return get_realtime_controller().configure(
+        result = get_realtime_controller().configure(
             payload.model_dump(exclude_none=True),
             allow_restart=allow_restart,
         )
+        result["operation"] = current_operation_snapshot()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -1553,32 +1639,80 @@ def configure_realtime(payload: RealtimeConfigurePayload, allow_restart: bool = 
 
 def start_realtime(payload: RealtimeStartPayload) -> dict:
     try:
+        ensure_operation_available("live voice conversion start")
+        set_operation_state("realtime", "preparing", "Preparing live route.")
         model_name = payload.modelName
         ensure_model_loaded(model_name)
         index_path = resolved_index_path(model_name, payload.indexPath)
-        return get_realtime_controller().start(
+        result = get_realtime_controller().start(
             payload.model_dump(exclude_none=True),
             str(model_file_path(model_name)),
             index_path,
         )
-    except HTTPException:
+        set_operation_state("realtime", "running", "Live voice conversion is active.")
+        return result
+    except HTTPException as exc:
+        detail = str(exc.detail) if exc.detail else "Live voice conversion could not start."
+        fail_operation_state("realtime", "Live failed.", detail)
         raise
     except ValueError as exc:
+        fail_operation_state("realtime", "Live failed.", str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
+        fail_operation_state("realtime", "Live failed.", str(exc))
         logger.exception("Realtime start failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 def stop_realtime() -> dict:
+    current_operation = current_operation_snapshot()
+    if current_operation["mode"] != "realtime" and not (realtime_controller is not None and realtime_controller.running):
+        return get_realtime_controller().status_snapshot()
+
+    set_operation_state("realtime", "stopping", "Stopping live route.")
     try:
-        return get_realtime_controller().stop()
+        result = get_realtime_controller().stop()
+        clear_operation_state()
+        return result
     except Exception as exc:
+        fail_operation_state("realtime", "Live failed to stop.", str(exc))
         logger.exception("Realtime stop failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 app = FastAPI(title="Swift RVC Phase 1 API")
+
+
+@app.on_event("startup")
+def startup_cleanup() -> None:
+    reset_text_audio_progress()
+    clear_operation_state()
+    cleanup_temporary_runtime_dirs()
+
+
+@app.on_event("shutdown")
+def shutdown_cleanup() -> None:
+    try:
+        if realtime_controller is not None:
+            if realtime_controller.running:
+                realtime_controller.stop()
+            realtime_controller.release_runtime()
+    except Exception:
+        logger.warning("Realtime cleanup failed during shutdown", exc_info=True)
+
+    try:
+        release_uvr_memory()
+    except Exception:
+        logger.warning("UVR cleanup failed during shutdown", exc_info=True)
+
+    try:
+        release_chattts_runtime("Released ChatTTS runtime during shutdown.")
+    except Exception:
+        logger.warning("ChatTTS cleanup failed during shutdown", exc_info=True)
+
+    reset_text_audio_progress("Backend shutdown cleaned transient text runtime.")
+    clear_operation_state()
+    cleanup_temporary_runtime_dirs()
 
 
 @app.get("/health")
@@ -1592,6 +1726,7 @@ def health() -> dict:
         "device": str(config.device),
         "selectedModel": selected_model_name,
         "realtimeRunning": get_realtime_controller().running if realtime_controller is not None else False,
+        "operation": current_operation_snapshot(),
     }
 
 
@@ -1614,12 +1749,14 @@ def catalog() -> dict:
 
 @app.post("/phase1/select-model")
 def select_model(payload: SelectModelRequest) -> dict:
+    ensure_operation_available("model selection")
     return ensure_model_loaded(payload.name)
 
 
 @app.post("/phase1/unload-model")
 def unload_selected_model() -> dict:
     # Keep the HTTP surface thin: the bridge only needs a compact success payload for model clearing.
+    ensure_operation_available("model unload")
     return unload_model()
 
 
@@ -1712,6 +1849,7 @@ def uvr_release() -> dict:
 
 @app.post("/phase1/release-runtime-memory")
 def release_runtime_memory_route() -> dict:
+    ensure_operation_available("runtime cache release")
     return release_runtime_memory()
 
 

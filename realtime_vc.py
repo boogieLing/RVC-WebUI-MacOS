@@ -263,10 +263,12 @@ class RealtimeVCController:
                     self.gui_config.index_path = new_index_path
                     restart_required = restart_required or self.running
 
-            self.set_devices(self.gui_config.sg_input_device, self.gui_config.sg_output_device)
+            self.gui_config.samplerate = self.get_device_samplerate(safe=True) or 0
+            self.gui_config.channels = self.get_device_channels(safe=True) or 1
 
             if restart_required and allow_restart:
                 self.stop_stream()
+                self.set_devices(self.gui_config.sg_input_device, self.gui_config.sg_output_device)
                 self._start_realtime_locked()
 
             return {
@@ -451,6 +453,10 @@ class RealtimeVCController:
             except Exception:
                 pass
             self.stream = None
+        try:
+            sd.default.reset()
+        except Exception:
+            pass
 
     def audio_callback(self, indata: np.ndarray, outdata: np.ndarray, frames, times, status) -> None:
         start_time = time.perf_counter()
@@ -569,7 +575,10 @@ class RealtimeVCController:
 
     def get_device_samplerate(self, safe: bool = False) -> Optional[int]:
         try:
-            return int(sd.query_devices(device=sd.default.device[0])["default_samplerate"])
+            input_device_index = self._selected_input_device_index()
+            if input_device_index is None:
+                raise RuntimeError("No input device selected.")
+            return int(sd.query_devices(device=input_device_index)["default_samplerate"])
         except Exception:
             if safe:
                 return None
@@ -577,10 +586,24 @@ class RealtimeVCController:
 
     def get_device_channels(self, safe: bool = False) -> Optional[int]:
         try:
-            max_input_channels = sd.query_devices(device=sd.default.device[0])["max_input_channels"]
-            max_output_channels = sd.query_devices(device=sd.default.device[1])["max_output_channels"]
+            input_device_index = self._selected_input_device_index()
+            output_device_index = self._selected_output_device_index()
+            if input_device_index is None or output_device_index is None:
+                raise RuntimeError("Input and output devices must be selected.")
+            max_input_channels = sd.query_devices(device=input_device_index)["max_input_channels"]
+            max_output_channels = sd.query_devices(device=output_device_index)["max_output_channels"]
             return min(max_input_channels, max_output_channels, 2)
         except Exception:
             if safe:
                 return None
             raise
+
+    def _selected_input_device_index(self) -> Optional[int]:
+        if self.gui_config.sg_input_device in self.input_devices:
+            return self.input_devices_indices[self.input_devices.index(self.gui_config.sg_input_device)]
+        return None
+
+    def _selected_output_device_index(self) -> Optional[int]:
+        if self.gui_config.sg_output_device in self.output_devices:
+            return self.output_devices_indices[self.output_devices.index(self.gui_config.sg_output_device)]
+        return None
